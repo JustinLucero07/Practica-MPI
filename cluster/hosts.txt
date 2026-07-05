@@ -7,5 +7,7 @@
 # Ejecucion desde el maestro:
 #   mpiexec -n 4 -hostfile hosts.txt python3 mpi_app.py --estaciones 8 --ciclos 20
 #
-172.20.10.5 slots=2
-172.20.10.8 slots=2
+192.168.56.1   slots=2      # tu PC (maestro)
+192.168.56.101 slots=2      # mpi1
+192.168.56.102 slots=2      # mpi2
+

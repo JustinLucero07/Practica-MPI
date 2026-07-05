@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import platform
+import threading
+from time import perf_counter
 
 from mpi4py import MPI
 
+from nucleo.analizador import AnalizadorDatos
 from nucleo.config import crear_estacion
 from nucleo.coordinador import CoordinadorMPI
 
@@ -65,7 +68,12 @@ def lanzar_gui(coord: CoordinadorMPI, estaciones: int, ciclos: int) -> None:
             barra = ttk.Frame(self, padding=(12, 10))
             barra.pack(fill="x")
             ttk.Label(barra, text="🌆 Monitoreo Ambiental — MPI", style="Titulo.TLabel").pack(side="left")
-            ttk.Label(barra, text="Estaciones:").pack(side="left", padx=(24, 4))
+            ttk.Label(barra, text="Modo:").pack(side="left", padx=(20, 4))
+            self._combo_modo = ttk.Combobox(barra, state="readonly", width=11,
+                                            values=["Secuencial", "Hilos", "MPI"])
+            self._combo_modo.set("MPI")
+            self._combo_modo.pack(side="left")
+            ttk.Label(barra, text="Estaciones:").pack(side="left", padx=(16, 4))
             self._spin_est = ttk.Spinbox(barra, from_=max(size, 4), to=24, width=4)
             self._spin_est.set(str(max(estaciones, size)))
             self._spin_est.pack(side="left")
@@ -205,25 +213,85 @@ def lanzar_gui(coord: CoordinadorMPI, estaciones: int, ciclos: int) -> None:
             self._stats["estaciones"].set(str(n_est))
             self._stats["procesos"].set(str(size))
 
+        def _run_secuencial(self, n_est, ciclos, on_cycle):
+            estaciones = [crear_estacion(i) for i in range(n_est)]
+            acc = []
+            t0 = perf_counter()
+            for c in range(ciclos):
+                for e in estaciones:
+                    acc.extend(e.trabajar_ciclo(c, coord.carga, 0))
+                stats = AnalizadorDatos.consolidar([AnalizadorDatos.resumen_local(acc, 0)])
+                on_cycle(c + 1, ciclos, stats, perf_counter() - t0)
+            return perf_counter() - t0, [n_est]
+
+        def _run_hilos(self, n_est, ciclos, on_cycle):
+            estaciones = [crear_estacion(i) for i in range(n_est)]
+            lock = threading.Lock()
+            barrera = threading.Barrier(len(estaciones) + 1)
+            acc: list = []
+
+            def correr(est, idx):
+                for c in range(ciclos):
+                    ms = est.trabajar_ciclo(c, coord.carga, idx)
+                    with lock:
+                        acc.extend(ms)
+                    try:
+                        barrera.wait()
+                    except threading.BrokenBarrierError:
+                        return
+
+            hilos = [threading.Thread(target=correr, args=(e, i), daemon=True)
+                     for i, e in enumerate(estaciones)]
+            t0 = perf_counter()
+            for h in hilos:
+                h.start()
+            for c in range(ciclos):
+                try:
+                    barrera.wait()
+                except threading.BrokenBarrierError:
+                    break
+                with lock:
+                    snap = list(acc)
+                stats = AnalizadorDatos.consolidar([AnalizadorDatos.resumen_local(snap, 0)])
+                on_cycle(c + 1, ciclos, stats, perf_counter() - t0)
+            for h in hilos:
+                h.join()
+            return perf_counter() - t0, [n_est]
+
         def _iniciar(self) -> None:
             if self._ejecutando:
                 return
             self._ejecutando = True
+            modo = self._combo_modo.get()
             self._btn.config(state="disabled")
             self._spin_est.config(state="disabled")
             self._spin_cic.config(state="disabled")
+            self._combo_modo.config(state="disabled")
             self._lbl_motor.config(text="● En ejecución", foreground="#1b7f3b")
             n_est = max(size, int(self._spin_est.get()))
             ciclos = max(10, int(self._spin_cic.get()))
             self._pintar_roster(n_est)
-            self._lbl_pie.config(text="Ejecutando simulación distribuida con MPI…")
-            tiempo, reparto = coord.ejecutar_para_gui(n_est, ciclos, self._on_cycle)
+
+            if modo == "MPI":
+                self._lbl_modo.config(text=f"Modo activo: MPI ({size} procesos)")
+                self._lbl_pie.config(text="Ejecutando simulación distribuida con MPI…")
+                tiempo, reparto = coord.ejecutar_para_gui(n_est, ciclos, self._on_cycle)
+            elif modo == "Hilos":
+                self._lbl_modo.config(text="Modo activo: Hilos (local, sin GIL)")
+                self._lbl_pie.config(text="Ejecutando con hilos…")
+                tiempo, reparto = self._run_hilos(n_est, ciclos, self._on_cycle)
+            else:
+                self._lbl_modo.config(text="Modo activo: Secuencial (local)")
+                self._lbl_pie.config(text="Ejecutando secuencial…")
+                tiempo, reparto = self._run_secuencial(n_est, ciclos, self._on_cycle)
+
             self._lbl_motor.config(text="● Detenido", foreground="#999999")
-            self._lbl_pie.config(text=f"Completado en {tiempo:.3f} s · reparto por proceso: {reparto}")
+            self._lbl_pie.config(text=f"Completado en {tiempo:.3f} s · modo {modo}")
             self._stats["porproc"].set(str(reparto))
             self._btn.config(state="normal")
             self._spin_est.config(state="normal")
             self._spin_cic.config(state="normal")
+            self._combo_modo.config(state="readonly")
             self._ejecutando = False
 
         def _on_cycle(self, ciclo: int, total: int, stats: dict, t: float) -> None:
@@ -236,6 +304,7 @@ def lanzar_gui(coord: CoordinadorMPI, estaciones: int, ciclos: int) -> None:
             for nombre, u in stats.get("ultimas", {}).items():
                 if self._tabla.exists(nombre):
                     vals = list(self._tabla.item(nombre, "values"))
+                    vals[3] = f"P{u['proceso']}"
                     vals[4] = u["texto"]
                     vals[5] = u.get("hora", "—")
                     self._tabla.item(nombre, values=vals)
