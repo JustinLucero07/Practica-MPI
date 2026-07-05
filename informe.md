@@ -120,6 +120,29 @@ AnalizadorDatos
   reparte y comunica el trabajo). Esto permite que el mismo dominio (`nucleo/`)
   se pruebe en modo secuencial sin ninguna dependencia de MPI.
 
+### 4.4 ¿Por qué existen `nucleo/` **y** `monitoreo/`?
+
+El repositorio tiene **dos** paquetes con un dominio muy parecido (`Variable`,
+`Medicion`, `EstacionAmbiental`, `AnalizadorDatos`, `AlertaAmbiental`). No es
+duplicación accidental: cada uno resuelve el problema con un **modelo de
+concurrencia distinto**, y ambos se usan en el proyecto final.
+
+| | `nucleo/` | `monitoreo/` |
+|---|---|---|
+| **Qué es** | La solución de **esta** práctica (la que se evalúa): secuencial de referencia + **MPI** sobre clúster | Código de una **práctica anterior** (hilos y procesos con `threading`/`multiprocessing`), reutilizado sin modificar |
+| **Modelo de concurrencia** | Memoria **distribuida** — procesos que pueden estar en computadoras distintas, se comunican por mensajes (`send`/`recv`/`gather`/`reduce`/`bcast`) | Memoria **compartida** — hilos o procesos `fork` en la misma máquina, se comunican con `Queue`/`Barrier`/`Semaphore` de Python |
+| **Coordinador** | `CoordinadorMPI` (`nucleo/coordinador.py`) | `ControladorMonitoreo` (`monitoreo/controlador.py`) |
+| **`Medicion` incluye** | `ciclo` **y** `proceso` (rank MPI que la generó) — necesario para saber qué nodo distribuido la produjo | Solo la medición — no existe "rank" en hilos/procesos, todos comparten el mismo proceso Python (o procesos `fork` sin necesidad de identificarse) |
+| **Clases extra** | Ninguna | `EstadoEstacion`, `ModoEjecucion`, `SnapshotMonitoreo`, `VistaEstacion`, `Estadisticas` — necesarias para reportar el **estado en vivo** de cada estación (Esperando/Procesando/Finalizada) a la GUI, algo que MPI no expone tan fácilmente entre nodos remotos |
+| **Para qué se usa en el proyecto** | Modo `mpi` (por defecto) en `main.py` y en la GUI | Modos `secuencial`, `hilos` y `procesos` en `main.py` y en la GUI |
+
+**Motivo de mantener ambos:** la rúbrica de esta práctica solo exige
+secuencial + MPI (eso vive enteramente en `nucleo/`). El paquete `monitoreo/`
+se conserva **sin tocar** únicamente para poder comparar 4 arquitecturas de
+paralelismo (secuencial, hilos, procesos, MPI) con el mismo caso de estudio —
+ver la sección 9.3 — sin arriesgar el código ya probado de la práctica
+anterior fusionándolo con el nuevo código MPI.
+
 ---
 
 ## 5. Estrategia de paralelización
@@ -174,6 +197,103 @@ El resultado es **idéntico sin importar cuántos procesos se usen** — esto se
 verificó en todas las corridas (las estadísticas por variable son las mismas
 con 1, 2, 4 o 6 procesos), lo que confirma que la distribución y la
 consolidación son correctas.
+
+### 5.5 Qué método se ejecuta realmente para cada modo (GUI y consola)
+
+Es importante distinguir esto porque **"Secuencial" no siempre es el mismo
+código**: hay dos implementaciones de "secuencial" en el proyecto, una en
+cada paquete, y cada punto de entrada (GUI o consola) usa una u otra.
+
+#### Tabla resumen
+
+| Modo elegido | Paquete que se ejecuta | Método exacto | ¿Necesita `mpiexec`? | Concurrencia real |
+|---|---|---|---|---|
+| Secuencial | `monitoreo/` | `ControladorMonitoreo.ejecutar_secuencial` (`monitoreo/controlador.py:181`) | No | Ninguna — un bucle simple, un solo hilo |
+| Hilos | `monitoreo/` | `ControladorMonitoreo.ejecutar_hilos` (`monitoreo/controlador.py:202`) | No | `threading.Thread` (memoria compartida, limitada por el GIL salvo build free-threaded) |
+| Procesos | `monitoreo/` | `ControladorMonitoreo.ejecutar_procesos` (`monitoreo/controlador.py:254`) | No | `multiprocessing.Process` (memoria compartida vía `fork`, un proceso por grupo de estaciones) |
+| MPI | `nucleo/` | `CoordinadorMPI.ejecutar_secuencial` + `CoordinadorMPI.ejecutar_paralelo` (`nucleo/coordinador.py`) | **Sí**, siempre — incluso para medir Ts | Memoria **distribuida**, procesos MPI reales (pueden estar en otra computadora) |
+
+La fila de MPI necesita `mpiexec` incluso para calcular Ts porque
+`ejecutar_secuencial` de `nucleo/coordinador.py` también corre **dentro** del
+mismo trabajo MPI (solo lo ejecuta el rank 0, los demás esperan en el
+`Barrier`) — es la única forma de garantizar que Ts y Tp se midan en las
+mismas condiciones de sistema, en la misma corrida.
+
+#### Flujo en la consola (`main.py`)
+
+```
+main.py
+ └── main()                                    [main.py:105]
+      ├── --modo mpi (por defecto)
+      │    └── _consola()                      [main.py:6]
+      │         ├── CoordinadorMPI.ejecutar_secuencial()   ← nucleo/
+      │         └── CoordinadorMPI.ejecutar_paralelo()     ← nucleo/  (send/recv, gather, reduce)
+      │
+      └── --modo secuencial | hilos | procesos
+           └── _consola_local(modo, ...)        [main.py:74]
+                └── ControladorMonitoreo(...).ejecutar(ModoEjecucion(modo))   ← monitoreo/
+                     ├── if modo == Secuencial → ejecutar_secuencial()
+                     ├── if modo == Hilos      → ejecutar_hilos()
+                     └── if modo == Procesos   → ejecutar_procesos()
+```
+
+`_consola_local` (`main.py:74-102`) es un único método que sirve para los 3
+modos no-MPI: crea un `ControladorMonitoreo` y le delega a
+`ControladorMonitoreo.ejecutar(...)`, que internamente decide con un
+`if/elif` cuál de los 3 métodos (`ejecutar_secuencial`/`ejecutar_hilos`/
+`ejecutar_procesos`) llamar, todos definidos en `monitoreo/controlador.py`
+(ver `ejecutar` en la línea 323 de ese archivo).
+
+#### Flujo en la interfaz gráfica (GUI, `UserInterface/app.py`)
+
+Al hacer clic en **"Iniciar"** se ejecuta `MonitoreoGUI._iniciar`
+(`app.py:264`), que decide según el combo "Modo":
+
+```
+_iniciar()                                      [app.py:264]
+ ├── modo == "MPI"
+ │    └── Thread → _trabajo_mpi(n_est, ciclos, np_mpi)     [app.py:295]
+ │         └── subprocess.Popen(["mpiexec", "-n", np_mpi, ...,
+ │                                python3.14t, "-m", "nucleo.mpi_runner", ...])
+ │              (proceso HIJO, separado de la GUI, usa nucleo/)
+ │
+ └── modo in {"Secuencial", "Hilos", "Procesos"}
+      ├── self._controlador = ControladorMonitoreo(...)     ← monitoreo/
+      └── Thread → _trabajo_local(modo)                     [app.py:292]
+           └── self._controlador.ejecutar(ModoEjecucion(modo))
+                (dentro del MISMO proceso de la GUI, solo un hilo aparte)
+```
+
+**La diferencia clave:** para Secuencial/Hilos/Procesos, la GUI crea el
+`ControladorMonitoreo` **en su propio proceso** y solo delega el trabajo a un
+hilo (`threading.Thread`) para no congelar la ventana — la concurrencia real
+(si la hay) ocurre **dentro** de ese método (`ejecutar_hilos` crea sus
+propios hilos, `ejecutar_procesos` sus propios `multiprocessing.Process`).
+Para MPI, en cambio, la GUI **no** ejecuta nada de MPI directamente: lanza un
+**proceso hijo completamente aparte** (`mpiexec ...`) con `subprocess.Popen`,
+y se limita a leer su salida.
+
+Esto explica por qué **solo `_trabajo_mpi` "sabe" de MPI** en toda la GUI: es
+el único método que construye una línea de `mpiexec`. El resto de la interfaz
+(`_sondear` en `app.py:326`, `_aplicar`) es agnóstico — solo consume
+diccionarios (`SnapshotMonitoreo` convertido a `dict`, o JSON parseado de la
+salida del subproceso MPI) sin importarle si vinieron de hilos, procesos o
+MPI.
+
+#### Cómo se lee el resultado en vivo en cada caso
+
+- **Secuencial/Hilos/Procesos:** `ControladorMonitoreo.ejecutar(...)` recibe
+  un callback `publicar` que se llama después de cada ciclo con un
+  `SnapshotMonitoreo` (objeto Python, en memoria, sin serializar) — la GUI lo
+  convierte a `dict` (`_snapshot_a_dict`) y lo mete en la cola.
+- **MPI:** no hay ningún objeto Python compartido entre la GUI y el
+  subproceso MPI — la única comunicación es el **texto** que
+  `nucleo/mpi_runner.py` imprime por `stdout` en formato JSON
+  (`print(json.dumps(d), flush=True)`), una línea por ciclo. La GUI lee esas
+  líneas y hace `json.loads(...)`. Es, en la práctica, el mismo patrón de
+  "paso de mensajes" que MPI usa entre procesos, aplicado aquí entre el
+  proceso de la GUI y el proceso `mpiexec` (aunque esta comunicación
+  GUI↔mpiexec es por `stdout`/`pipe`, no por `mpi4py`).
 
 ---
 

@@ -25,6 +25,37 @@ coordinador MPI. Clases:
 | `AlertaAmbiental` | Alerta cuando una variable supera su umbral. |
 | `CoordinadorMPI` | Reparte estaciones, coordina la comunicación MPI y mide el rendimiento. |
 
+### ¿Por qué existen `nucleo/` **y** `monitoreo/`?
+
+El proyecto tiene **dos** paquetes con un dominio muy parecido (`Variable`,
+`Medicion`, `EstacionAmbiental`, `AnalizadorDatos`, `AlertaAmbiental`), y es
+importante dejar claro que **no es duplicación accidental**:
+
+- **`nucleo/`** es **la solución de esta práctica** (la que se evalúa): la
+  versión secuencial de referencia y la versión paralela con **MPI**
+  (`CoordinadorMPI`), pensadas para ejecutarse en un clúster. Todo lo pedido
+  por la rúbrica (punto a punto, colectivas, distribución de trabajo,
+  consolidación, Ts/Tp/S/E) vive aquí.
+- **`monitoreo/`** es el código de una **práctica anterior** (hilos y
+  procesos con `threading`/`multiprocessing`, memoria **compartida** en una
+  sola máquina — sin MPI). Se reutiliza tal cual, sin modificarlo, únicamente
+  para poder comparar **4 arquitecturas de paralelismo** (secuencial, hilos,
+  procesos, MPI) con el mismo problema — ver la sección
+  [Comparación de los 4 modos de paralelismo](#comparación-de-los-4-modos-de-paralelismo).
+  Esa comparación **no es un requisito de la rúbrica de MPI**, es un extra
+  para enriquecer el análisis de rendimiento del informe.
+
+Por eso hay dos versiones de `EstacionAmbiental`/`AnalizadorDatos`/etc. muy
+parecidas: cada una está adaptada a un modelo de concurrencia distinto
+(`nucleo/` sabe de `rank`/`proceso` MPI y memoria distribuida; `monitoreo/`
+sabe de hilos/procesos y memoria compartida, y además trackea el **estado**
+de cada estación — `Esperando`/`Procesando`/`Finalizada` — para poder pintarlo
+en vivo en la GUI, algo que `nucleo/` no necesita). Si se quisiera eliminar la
+duplicación, habría que fusionar ambos dominios en una sola base compartida y
+que cada `Coordinador`/`Controlador` solo aporte su estrategia de
+concurrencia — no se hizo para no arriesgar el código ya probado de la
+práctica de hilos/procesos.
+
 ### Estrategia de paralelización
 
 - **Modelo SPMD:** todos los procesos ejecutan `main.py`. El **rank 0** actúa
