@@ -8,6 +8,7 @@ def _consola(estaciones: int, ciclos: int, carga: int, solo_paralelo: bool) -> N
 
     from mpi4py import MPI
 
+    from nucleo.config import crear_estacion
     from nucleo.coordinador import CoordinadorMPI
 
     comm = MPI.COMM_WORLD
@@ -39,8 +40,12 @@ def _consola(estaciones: int, ciclos: int, carga: int, solo_paralelo: bool) -> N
     print("=" * 70)
     print(f"Python : {platform.python_version()}  ({platform.system()} {platform.release()})")
     print(f"MPI    : {version}")
-    print(f"Configuracion: {estaciones} estaciones x {ciclos} ciclos")
-    print(f"Reparto de estaciones por proceso: {reparto}\n")
+    print(f"Configuracion: {estaciones} estaciones x {ciclos} ciclos\n")
+    print("Distribución MPI (send punto a punto, rank 0 -> cada trabajador):")
+    for r, indices in enumerate(reparto):
+        nombres = ", ".join(crear_estacion(i).nombre for i in indices)
+        print(f"  Proceso {r}: {len(indices)} estacion(es) -> {nombres or '(ninguna)'}")
+    print()
 
     if ts is not None:
         print(f">>> SECUENCIAL (1 proceso)  Ts = {ts:.3f} s")
@@ -66,9 +71,44 @@ def _consola(estaciones: int, ciclos: int, carga: int, solo_paralelo: bool) -> N
     print("=" * 70)
 
 
+def _consola_local(modo: str, estaciones: int, ciclos: int, carga: int) -> None:
+    """Corre secuencial/hilos/procesos SIN MPI (un solo `python`, sin mpiexec)."""
+    import os
+    import platform
+    from time import perf_counter
+
+    from monitoreo.controlador import ControladorMonitoreo
+    from monitoreo.dominio import ModoEjecucion
+
+    ctrl = ControladorMonitoreo(ciclos=ciclos, carga_cpu=carga, n_estaciones=estaciones)
+    t0 = perf_counter()
+    snap = ctrl.ejecutar(ModoEjecucion(modo.capitalize()))
+    t = perf_counter() - t0
+    e = snap.estadisticas
+
+    print("=" * 70)
+    print(f"SISTEMA DE MONITOREO AMBIENTAL URBANO — VERSION {modo.upper()} (sin MPI)")
+    print("=" * 70)
+    print(f"Python : {platform.python_version()}  ({platform.system()} {platform.release()})")
+    print(f"Nucleos de CPU  : {os.cpu_count()}")
+    print(f"Configuracion   : {estaciones} estaciones x {ciclos} ciclos\n")
+    print(f"  Mediciones procesadas : {e.mediciones_procesadas}")
+    print(f"  Alertas generadas     : {e.alertas_generadas}")
+    print(f"  Zona de mayor riesgo  : {e.zona_mayor_riesgo}")
+    print("  Por variable (prom / min / max):")
+    for var, d in e.por_variable.items():
+        print(f"    - {var.etiqueta:12} {d.promedio:7.1f} / {d.minimo:6.1f} / {d.maximo:6.1f}  (n={d.n})")
+    print(f"\n  Tiempo total (T{modo[0]}): {t:.3f} s")
+    print("=" * 70)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitoreo ambiental urbano — MPI")
     parser.add_argument("--gui", action="store_true", help="Abre la interfaz grafica (proceso unico).")
+    parser.add_argument(
+        "--modo", choices=["mpi", "secuencial", "hilos", "procesos"], default="mpi",
+        help="Modo de ejecucion en consola. 'mpi' requiere mpiexec; los demas corren con un solo python.",
+    )
     parser.add_argument("--estaciones", type=int, default=8)
     parser.add_argument("--ciclos", type=int, default=20)
     parser.add_argument("--carga", type=int, default=600)
@@ -81,7 +121,10 @@ def main() -> None:
         lanzar(args.estaciones, args.ciclos, args.carga, args.procesos_mpi)
         return
 
-    _consola(args.estaciones, args.ciclos, args.carga, args.solo_paralelo)
+    if args.modo == "mpi":
+        _consola(args.estaciones, args.ciclos, args.carga, args.solo_paralelo)
+    else:
+        _consola_local(args.modo, args.estaciones, args.ciclos, args.carga)
 
 
 if __name__ == "__main__":

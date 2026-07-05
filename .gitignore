@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.claude/
+UserInterface/__pycache__/
+/nucleo/__pycache__/

@@ -71,8 +71,7 @@ class CoordinadorMPI:
 
         if self.rank == 0:
             stats = AnalizadorDatos.consolidar(resumenes)
-            reparto = [len(x) for x in self.repartir(n_est)]
-            return tp, stats, total, reparto
+            return tp, stats, total, self.repartir(n_est)
         return None
 
     # ==================================================================
