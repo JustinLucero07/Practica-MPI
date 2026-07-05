@@ -1,11 +1,14 @@
-# Hostfile del cluster. Una linea por nodo.
-# "slots" = numero de procesos MPI que admite ese nodo.
+# Hostfile del cluster (red host-only 192.168.56.0/24).
+# "slots" = numero de procesos MPI por nodo.
 #
-#   172.20.10.5 = maquina de justin (maestro/host)
-#   172.20.10.8 = maquina de wimer  (trabajador)
+#   192.168.56.1   = tu PC (maestro)
+#   192.168.56.101 = mpi1 (VM)
+#   192.168.56.102 = mpi2 (VM)
 #
-# Ejecucion desde el maestro:
-#   mpiexec -n 4 -hostfile hosts.txt python3 mpi_app.py --estaciones 8 --ciclos 20
+# Ejecucion:
+#   mpiexec -n 6 -hostfile cluster/hosts.txt --mca btl_tcp_if_include 192.168.56.0/24 \
+#     python3.14t main.py --estaciones 12 --ciclos 20
 #
-10.0.2.4 slots=2
-10.0.2.3 slots=2
+192.168.56.1   slots=2
+192.168.56.101 slots=2
+192.168.56.102 slots=2

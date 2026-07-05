@@ -265,8 +265,13 @@ class MonitoreoGUI(tk.Tk):
         if self._corriendo:
             return
         modo = self._modo.get()
-        n_est = max(4, int(self._sp_est.get()))
-        ciclos = max(10, int(self._sp_cic.get()))
+        try:
+            n_est = max(4, min(24, int(self._sp_est.get())))
+            ciclos = max(10, min(40, int(self._sp_cic.get())))
+        except (TypeError, ValueError):
+            n_est, ciclos = 8, 20
+        self._sp_est.set(str(n_est))
+        self._sp_cic.set(str(ciclos))
         self._roster(n_est)
         self._corriendo = True
         self._btn.config(state="disabled")
