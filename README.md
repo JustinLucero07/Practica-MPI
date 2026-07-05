@@ -410,6 +410,36 @@ del trabajo y la consolidación son correctas**.
 > solución MPI), iguala el número de trabajadores, p. ej. corriendo también
 > `mpiexec -n 20 python3.14t main.py --estaciones 40 --ciclos 50`.
 
+### Secuencial vs. Hilos vs. Procesos vs. MPI (1000 estaciones × 20 ciclos, carga 600, 80 080 mediciones — 1 sola máquina `justin07`, 20 núcleos)
+
+Comandos usados (los 4 con el mismo tamaño de problema):
+
+```bash
+python3.14t main.py --modo secuencial --estaciones 1000 --ciclos 20 --carga 600
+python3.14t main.py --modo hilos       --estaciones 1000 --ciclos 20 --carga 600
+python3.14t main.py --modo procesos    --estaciones 1000 --ciclos 20 --carga 600
+mpiexec -n 6 python3.14t main.py --estaciones 1000 --ciclos 20 --carga 600
+```
+
+| Modo | Trabajadores | Tiempo | Speedup vs. secuencial (130.636 s) |
+|---|---|---|---|
+| Secuencial | 1 | 130.636 s | x1.00 (referencia) |
+| Hilos | 20 (auto = núcleos) | 18.775 s | x6.96 |
+| Procesos | 20 (auto = núcleos) | 24.436 s | x5.35 |
+| MPI | 6 (`-n 6`) | 29.325 s | x4.46 (con su propio Ts = 153.045 s, S=x5.22, E=86.98 %) |
+
+> **Por qué el MPI de esta fila muestra dos velocidades:** el modo `mpi`
+> corre su **propio** baseline secuencial dentro de la misma ejecución
+> (Ts = 153.045 s) para calcular `S = Ts/Tp` de forma justa (mismo proceso,
+> mismas condiciones del sistema en ese instante). Esa Ts interna difiere de
+> la corrida `--modo secuencial` independiente (130.636 s) por variación
+> normal del sistema entre ejecuciones (~15 %, uso de CPU de fondo, caché,
+> etc.) — **no** es un cambio en el algoritmo. Por eso, para juzgar el
+> aceleramiento **oficial** de la solución MPI se usa siempre el Ts medido
+> **dentro de la misma corrida** (x5.22, E=86.98 %), y solo se compara contra
+> Hilos/Procesos como referencia aproximada de qué tan rápido va cada
+> arquitectura frente al mismo trabajo.
+
 ### MPI en el clúster real (3 nodos: `justin07` + `mpi1` + `mpi2`, 6 procesos)
 
 | Estaciones × ciclos | Mediciones | Ts | Tp | S = Ts/Tp | E = S/p |
