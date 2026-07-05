@@ -112,11 +112,11 @@ class MonitoreoGUI(tk.Tk):
         self._modo.bind("<<ComboboxSelected>>", lambda e: self._toggle_mpi())
 
         ttk.Label(barra, text="Estaciones:").pack(side="left", padx=(14, 4))
-        self._sp_est = ttk.Spinbox(barra, from_=4, to=24, width=4)
+        self._sp_est = ttk.Spinbox(barra, from_=1, to=2000, width=6)
         self._sp_est.set(str(estaciones))
         self._sp_est.pack(side="left")
         ttk.Label(barra, text="Ciclos:").pack(side="left", padx=(10, 4))
-        self._sp_cic = ttk.Spinbox(barra, from_=10, to=40, width=4)
+        self._sp_cic = ttk.Spinbox(barra, from_=1, to=500, width=5)
         self._sp_cic.set(str(ciclos))
         self._sp_cic.pack(side="left")
 
@@ -266,8 +266,8 @@ class MonitoreoGUI(tk.Tk):
             return
         modo = self._modo.get()
         try:
-            n_est = max(4, min(24, int(self._sp_est.get())))
-            ciclos = max(10, min(40, int(self._sp_cic.get())))
+            n_est = max(1, int(self._sp_est.get()))
+            ciclos = max(1, int(self._sp_cic.get()))
         except (TypeError, ValueError):
             n_est, ciclos = 8, 20
         self._sp_est.set(str(n_est))

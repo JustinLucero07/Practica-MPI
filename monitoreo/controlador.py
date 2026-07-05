@@ -37,14 +37,15 @@ class _FinEstacion:
     estacion_id: int
 
 
-def _trabajo_estacion(
-    estacion: EstacionAmbiental,
+def _trabajo_grupo(
+    estaciones: list[EstacionAmbiental],
     ciclos: int,
     carga_cpu: int,
     cola: "mp.Queue",
     barrera: "mp.Barrier",
     stop: "mp.Event",
     semaforo_analisis: "mp.Semaphore",
+    grupo_id: int,
 ) -> None:
     for ciclo in range(ciclos):
         if stop.is_set():
@@ -54,11 +55,12 @@ def _trabajo_estacion(
         except threading.BrokenBarrierError:
             break
         with semaforo_analisis:
-            mediciones, _ = estacion.trabajar_ciclo(ciclo, carga_cpu)
-        for m in mediciones:
-            cola.put(m)
-        cola.put(_FinCiclo(estacion.id, ciclo))
-    cola.put(_FinEstacion(estacion.id))
+            for estacion in estaciones:
+                mediciones, _ = estacion.trabajar_ciclo(ciclo, carga_cpu)
+                for m in mediciones:
+                    cola.put(m)
+        cola.put(_FinCiclo(grupo_id, ciclo))
+    cola.put(_FinEstacion(grupo_id))
 
 
 class ControladorMonitoreo:
@@ -200,25 +202,29 @@ class ControladorMonitoreo:
     def ejecutar_hilos(self, publicar: Publicador | None = None) -> SnapshotMonitoreo:
         self._reset()
         n = len(self.estaciones)
-        barrera = threading.Barrier(n + 1)
+        # Pocos hilos (segun nucleos); cada uno atiende un GRUPO de estaciones.
+        n_workers = max(1, min(self.max_analisis, n))
+        grupos = [self.estaciones[g::n_workers] for g in range(n_workers)]
+        barrera = threading.Barrier(n_workers + 1)
         stop = self._stop
 
-        def correr(est: EstacionAmbiental) -> None:
+        def correr(grupo: list[EstacionAmbiental]) -> None:
             for ciclo in range(self.ciclos):
                 if stop.is_set():
                     break
-                self._estado_map[est.id] = EstadoEstacion.PROCESANDO
-                mediciones, _ = est.trabajar_ciclo(ciclo, self.analizador.carga)
-                self._registrar(mediciones)
-                self._estado_map[est.id] = EstadoEstacion.ESPERANDO
+                for est in grupo:
+                    self._estado_map[est.id] = EstadoEstacion.PROCESANDO
+                    mediciones, _ = est.trabajar_ciclo(ciclo, self.analizador.carga)
+                    self._registrar(mediciones)
+                    self._estado_map[est.id] = EstadoEstacion.ESPERANDO
                 try:
                     barrera.wait()
                 except threading.BrokenBarrierError:
                     break
 
         hilos = [
-            threading.Thread(target=correr, args=(e,), name=e.nombre, daemon=True)
-            for e in self.estaciones
+            threading.Thread(target=correr, args=(grupos[g],), name=f"grupo-{g}", daemon=True)
+            for g in range(n_workers)
         ]
         self._t0 = perf_counter()
         previo = self._t0
@@ -248,23 +254,29 @@ class ControladorMonitoreo:
     def ejecutar_procesos(self, publicar: Publicador | None = None) -> SnapshotMonitoreo:
         self._reset()
         n = len(self.estaciones)
+        # Se usan pocos procesos (segun nucleos) y cada uno atiende un GRUPO de
+        # estaciones. Asi el modo escala a cualquier cantidad de estaciones sin
+        # agotar recursos del sistema.
+        n_workers = max(1, min(self.max_analisis, n))
+        grupos = [self.estaciones[g::n_workers] for g in range(n_workers)]
+
         ctx = mp.get_context("fork")
         cola: mp.Queue = ctx.Queue()
-        barrera = ctx.Barrier(n)
+        barrera = ctx.Barrier(n_workers)
         stop_mp = ctx.Event()
-        semaforo = ctx.Semaphore(max(1, min(self.max_analisis, n)))
+        semaforo = ctx.Semaphore(n_workers)
 
         procesos = [
             ctx.Process(
-                target=_trabajo_estacion,
+                target=_trabajo_grupo,
                 args=(
-                    est, self.ciclos, self.analizador.carga,
-                    cola, barrera, stop_mp, semaforo,
+                    grupos[g], self.ciclos, self.analizador.carga,
+                    cola, barrera, stop_mp, semaforo, g,
                 ),
-                name=est.nombre,
+                name=f"grupo-{g}",
                 daemon=True,
             )
-            for est in self.estaciones
+            for g in range(n_workers)
         ]
         self._t0 = perf_counter()
         previo = self._t0
@@ -273,10 +285,10 @@ class ControladorMonitoreo:
         for est in self.estaciones:
             self._estado_map[est.id] = EstadoEstacion.PROCESANDO
 
-        finalizadas: set[int] = set()
+        finalizados: set[int] = set()
         fines_por_ciclo: dict[int, int] = {}
 
-        while len(finalizadas) < n:
+        while len(finalizados) < n_workers:
             if self._stop.is_set():
                 stop_mp.set()
             try:
@@ -291,7 +303,7 @@ class ControladorMonitoreo:
                 self._registrar([item])
             elif isinstance(item, _FinCiclo):
                 fines_por_ciclo[item.ciclo] = fines_por_ciclo.get(item.ciclo, 0) + 1
-                if fines_por_ciclo[item.ciclo] == n:
+                if fines_por_ciclo[item.ciclo] == n_workers:
                     ahora = perf_counter()
                     self._tiempos_ciclo.append(ahora - previo)
                     previo = ahora
@@ -299,8 +311,7 @@ class ControladorMonitoreo:
                         publicar, ModoEjecucion.PROCESOS, item.ciclo + 1, True
                     )
             elif isinstance(item, _FinEstacion):
-                finalizadas.add(item.estacion_id)
-                self._estado_map[item.estacion_id] = EstadoEstacion.FINALIZADA
+                finalizados.add(item.estacion_id)
 
         for p in procesos:
             p.join()
