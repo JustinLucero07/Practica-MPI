@@ -27,7 +27,7 @@ class CoordinadorMPI:
         self.size = comm.Get_size()
         self.carga = carga
 
-    # ------------------------------------------------------------------
+
     def repartir(self, total: int) -> list[list[int]]:
         asign: list[list[int]] = [[] for _ in range(self.size)]
         for i in range(total):
@@ -42,16 +42,15 @@ class CoordinadorMPI:
                 acc.extend(est.trabajar_ciclo(ciclo, self.carga, self.rank))
         return AnalizadorDatos.resumen_local(acc, self.rank)
 
-    # ==================================================================
-    # MODO CONSOLA (comparación de rendimiento)
-    # ==================================================================
+   
+    
     def ejecutar_secuencial(self, n_est: int, ciclos: int) -> tuple[float, dict]:
         t0 = MPI.Wtime()
         resumen = self._resumen_de(list(range(n_est)), ciclos)
         return MPI.Wtime() - t0, AnalizadorDatos.consolidar([resumen])
 
     def ejecutar_paralelo(self, n_est: int, ciclos: int):
-        # 1) PUNTO A PUNTO: el coordinador asigna estaciones a cada trabajador.
+        
         if self.rank == 0:
             asign = self.repartir(n_est)
             mis = asign[0]
@@ -64,7 +63,7 @@ class CoordinadorMPI:
         t0 = MPI.Wtime()
         resumen_local = self._resumen_de(mis, ciclos)
 
-        # 2) COLECTIVAS: gather de los resúmenes + reduce del total y del tiempo.
+        
         resumenes = self.comm.gather(resumen_local, root=0)
         total = self.comm.reduce(resumen_local["n"], op=MPI.SUM, root=0)
         tp = self.comm.reduce(MPI.Wtime() - t0, op=MPI.MAX, root=0)
@@ -74,9 +73,8 @@ class CoordinadorMPI:
             return tp, stats, total, self.repartir(n_est)
         return None
 
-    # ==================================================================
-    # MODO GUI (por ciclos, permite varias corridas)
-    # ==================================================================
+    
+    
     def bucle_trabajador(self) -> None:
         """Bucle de los procesos trabajadores en modo GUI."""
         while True:
