@@ -562,16 +562,3 @@ Practica-MPI/
 └── README.md
 ```
 
----
-
-## Entregables
-
-- [x] Código fuente (esta carpeta, POO organizada en paquetes).
-- [x] README con instalación y ejecución.
-- [x] Tabla de resultados experimentales (arriba).
-- [x] Archivo de configuración de nodos → [cluster/hosts.txt](cluster/hosts.txt).
-- [x] Evidencia de ejecución en el clúster: procesos `python3.14t` corriendo en
-      `mpi1` y `mpi2` (`pgrep`) y salida completa de `mpiexec ... main.py`
-      (Ts=1.294s, Tp=0.350s, S=x3.70, E=61.66%) corrida en las 3 máquinas —
-      ver sección [Configuración real del clúster](#configuración-real-del-clúster-host--2-máquinas-virtuales).
-- [ ] Informe técnico en PDF.
